@@ -44,13 +44,18 @@ class SnowflakeConnector:
             self.connect()
 
         try:
-            # If query is a Path, read the SQL file
-            if isinstance(query, (str, Path)) and Path(query).is_file():
-                with open(query, 'r') as file:
-                    query = file.read()
+            # Handle query input
+            if isinstance(query, Path) or (isinstance(query, str) and Path(query).is_file()):
+                # Convert to Path object if it's a string path
+                query_path = Path(query) if isinstance(query, str) else query
+                with open(query_path, 'r') as file:
+                    sql_query = file.read()
+            else:
+                # Treat as a direct SQL string
+                sql_query = query
 
             cursor = self.conn.cursor()
-            cursor.execute(query)
+            cursor.execute(sql_query)
             results = cursor.fetchall()
             column_names = [column[0] for column in cursor.description]
             cursor.close()
