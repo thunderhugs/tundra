@@ -21,7 +21,7 @@ class SharePointConnector:
                                    site_url, username, and password
         """
         self.config = config
-        self.ctx = None
+        self.client = ClientContext(config["site_url"]).with_credentials(config["username"], config["password"])        
         
     def connect(self) -> None:
         """Establish connection to SharePoint"""
@@ -152,49 +152,19 @@ class SharePointConnector:
             raise ConnectionError(f"Failed to save DataFrame to SharePoint: {str(e)}")
 
     def get_list_items(self, list_name: str, fields: Optional[List[str]] = None) -> pd.DataFrame:
-        """
-        Read SharePoint list items into a DataFrame
-        
-        Args:
-            list_name (str): Name of the SharePoint list
-            fields (List[str], optional): List of field names to retrieve. If None, gets all fields.
-            
-        Returns:
-            pd.DataFrame: DataFrame containing the list items
-        """
-        if not self.ctx:
-            self.connect()
-            
         try:
-            # Get the list
-            target_list = self.ctx.web.lists.get_by_title(list_name)
-            
-            # Get all list items
-            items = target_list.items
-            
-            # If specific fields are requested, add them to the query
+            list_obj = self.ctx.web.lists.get_by_title(list_name)
+            items = list_obj.get_items().execute_query()
+            data = [item.properties for item in items]
+            df = pd.DataFrame(data)
+
             if fields:
-                items = items.select(fields)
-            
-            self.ctx.load(items)
-            self.ctx.execute_query()
-            
-            # Convert to list of dictionaries
-            data = []
-            for item in items:
-                # Convert item properties to dict
-                item_dict = {}
-                for prop in item.properties.keys():
-                    # Skip internal fields that start with '_'
-                    if not prop.startswith('_'):
-                        item_dict[prop] = item.properties[prop]
-                data.append(item_dict)
-            
-            # Convert to DataFrame
-            return pd.DataFrame(data)
+                return df[fields]
+            return df
             
         except Exception as e:
-            raise ConnectionError(f"Failed to read SharePoint list: {str(e)}")
+            print(f"An error occurred: {e}")
+            return pd.DataFrame()
 
     def update_list_item(self, list_name: str, item_id: int, update_dict: Dict) -> None:
         """
