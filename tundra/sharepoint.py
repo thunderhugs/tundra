@@ -1,12 +1,11 @@
 from pathlib import Path
-from typing import Dict, Optional, Union, List
+from typing import Dict, Optional, Union, List, Any
 import pandas as pd
 from io import StringIO, BytesIO
 from office365.runtime.auth.authentication_context import AuthenticationContext
 from office365.sharepoint.client_context import ClientContext
 from office365.sharepoint.files.file import File
 from office365.sharepoint.files.creation_information import FileCreationInformation
-from office365.sharepoint.lists.list import List
 from .exceptions import ConfigurationError, ConnectionError
 
 class SharePointConnector:
@@ -21,7 +20,7 @@ class SharePointConnector:
                                    site_url, username, and password
         """
         self.config = config
-        self.client = ClientContext(config["site_url"]).with_credentials(config["username"], config["password"])        
+        self.ctx = None
         
     def connect(self) -> None:
         """Establish connection to SharePoint"""
@@ -39,6 +38,7 @@ class SharePointConnector:
                 web = self.ctx.web
                 self.ctx.load(web)
                 self.ctx.execute_query()
+                print(f"Connected to SharePoint site: {web.properties['Title']}")
             else:
                 raise ConnectionError(f"SharePoint authentication failed: {ctx_auth.get_last_error()}")
                 
@@ -98,82 +98,42 @@ class SharePointConnector:
         except Exception as e:
             raise ConnectionError(f"Failed to read Excel from SharePoint: {str(e)}")
 
-    def save_dataframe(self, 
-                      df: pd.DataFrame, 
-                      folder_name: str, 
-                      file_name: str,
-                      file_type: str = 'csv',
-                      overwrite: bool = True,
-                      **pandas_kwargs) -> None:
+    def get_list_items(self, list_name: str, fields: Optional[List[str]] = None) -> pd.DataFrame:
         """
-        Save DataFrame to SharePoint folder
+        Get items from a SharePoint list
         
         Args:
-            df (pd.DataFrame): DataFrame to save
-            folder_name (str): Name of the SharePoint folder
-            file_name (str): Name of the file to create
-            file_type (str): Type of file to save ('csv' or 'excel')
-            overwrite (bool): Whether to overwrite existing file
-            **pandas_kwargs: Additional arguments to pass to DataFrame.to_csv or DataFrame.to_excel
+            list_name (str): Name of the SharePoint list
+            fields (Optional[List[str]]): List of field names to retrieve
+            
+        Returns:
+            pd.DataFrame: DataFrame containing the list items
         """
         if not self.ctx:
             self.connect()
             
         try:
-            # Get the target folder
-            target_folder = self.ctx.web.get_folder_by_server_relative_url(folder_name)
-            self.ctx.load(target_folder)
-            self.ctx.execute_query()
-            
-            # Create buffer and save DataFrame to it
-            buffer = BytesIO()
-            if file_type.lower() == 'csv':
-                df.to_csv(buffer, index=False, **pandas_kwargs)
-            elif file_type.lower() == 'excel':
-                df.to_excel(buffer, index=False, **pandas_kwargs)
-            else:
-                raise ValueError("file_type must be either 'csv' or 'excel'")
-            
-            # Get the buffer content
-            buffer.seek(0)
-            content = buffer.getvalue()
-
-            # Create file info
-            file_info = FileCreationInformation()
-            file_info.content = content
-            file_info.url = file_name
-            file_info.overwrite = overwrite
-
-            # Upload file
-            target_folder.files.add(file_info)
-            self.ctx.execute_query()
-            
-        except Exception as e:
-            raise ConnectionError(f"Failed to save DataFrame to SharePoint: {str(e)}")
-
-    def get_list_items(self, list_name: str, fields: Optional[List[str]] = None) -> pd.DataFrame:
-        try:
             list_obj = self.ctx.web.lists.get_by_title(list_name)
             items = list_obj.get_items().execute_query()
             data = [item.properties for item in items]
             df = pd.DataFrame(data)
-
-            if fields:
+            
+            if fields and not df.empty:
                 return df[fields]
             return df
             
         except Exception as e:
-            print(f"An error occurred: {e}")
+            print(f"An error occurred while retrieving list items: {e}")
             return pd.DataFrame()
 
-    def update_list_item(self, list_name: str, item_id: int, update_dict: Dict) -> None:
+    def update_list_item(self, list_name: str, item_id: int, update_dict: Dict[str, Any]) -> None:
         """
         Update a SharePoint list item
         
         Args:
             list_name (str): Name of the SharePoint list
             item_id (int): ID of the item to update
-            update_dict (Dict): Dictionary of field names and values to update
+            update_dict (Dict[str, Any]): Dictionary of field names and values to update
         """
         if not self.ctx:
             self.connect()
@@ -188,13 +148,13 @@ class SharePointConnector:
         except Exception as e:
             raise ConnectionError(f"Failed to update SharePoint list item: {str(e)}")
 
-    def add_list_item(self, list_name: str, item_dict: Dict) -> int:
+    def add_list_item(self, list_name: str, item_dict: Dict[str, Any]) -> int:
         """
         Add a new item to a SharePoint list
         
         Args:
             list_name (str): Name of the SharePoint list
-            item_dict (Dict): Dictionary of field names and values for the new item
+            item_dict (Dict[str, Any]): Dictionary of field names and values for the new item
             
         Returns:
             int: ID of the newly created item
@@ -257,6 +217,59 @@ class SharePointConnector:
             
         except Exception as e:
             raise ConnectionError(f"Failed to get SharePoint list fields: {str(e)}")
+
+    def save_dataframe(self, 
+                      df: pd.DataFrame, 
+                      folder_name: str, 
+                      file_name: str,
+                      file_type: str = 'csv',
+                      overwrite: bool = True,
+                      **pandas_kwargs) -> None:
+        """
+        Save DataFrame to SharePoint folder
+        
+        Args:
+            df (pd.DataFrame): DataFrame to save
+            folder_name (str): Name of the SharePoint folder
+            file_name (str): Name of the file to create
+            file_type (str): Type of file to save ('csv' or 'excel')
+            overwrite (bool): Whether to overwrite existing file
+            **pandas_kwargs: Additional arguments to pass to DataFrame.to_csv or DataFrame.to_excel
+        """
+        if not self.ctx:
+            self.connect()
+            
+        try:
+            # Get the target folder
+            target_folder = self.ctx.web.get_folder_by_server_relative_url(folder_name)
+            self.ctx.load(target_folder)
+            self.ctx.execute_query()
+            
+            # Create buffer and save DataFrame to it
+            buffer = BytesIO()
+            if file_type.lower() == 'csv':
+                df.to_csv(buffer, index=False, **pandas_kwargs)
+            elif file_type.lower() == 'excel':
+                df.to_excel(buffer, index=False, **pandas_kwargs)
+            else:
+                raise ValueError("file_type must be either 'csv' or 'excel'")
+            
+            # Get the buffer content
+            buffer.seek(0)
+            content = buffer.getvalue()
+
+            # Create file info
+            file_info = FileCreationInformation()
+            file_info.content = content
+            file_info.url = file_name
+            file_info.overwrite = overwrite
+
+            # Upload file
+            target_folder.files.add(file_info)
+            self.ctx.execute_query()
+            
+        except Exception as e:
+            raise ConnectionError(f"Failed to save DataFrame to SharePoint: {str(e)}")
 
     def __enter__(self):
         """Context manager entry"""
